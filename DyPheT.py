@@ -16,6 +16,7 @@ import datetime
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize_scalar
+from scipy.signal import argrelextrema
 
 
 class OpenVideo(rgb.OpenVideo):
@@ -94,6 +95,10 @@ class OpenVideo(rgb.OpenVideo):
             self.writer=csv.writer(self.csvfile1)
             self.writer.writerow(['Frame Number','iteration','Angle applide','Angle measured','Spheriod angle','Angle error', 'cx', 'cy', 'dx', 'dy', 'derr'])
             # Move through the frames one by one
+            
+           
+            
+            
             while self.frameno < self.maxframes:
                 print(f'Frame {self.frameno+1} of {self.maxframes}')
                 
@@ -343,7 +348,8 @@ class OpenVideo(rgb.OpenVideo):
         good_match = True
         anglechange=10
         target_cal=10
-        derr_tolorence=3.0
+        derr_tolorence_base=3.0
+        derr_tolorence=derr_tolorence_base
         derr=50
         best_conf=0
         
@@ -394,10 +400,14 @@ class OpenVideo(rgb.OpenVideo):
             
             if len(self.rotatedframes) < 3:
                 dx, dy, derr, fitconfidence, conarray = self.estimate_T(rounds, cutsize, new_frame,old_frame_1, n_number=0)
-            elif rounds%5==0 and rounds >5:
+                derr_tolorence=derr_tolorence_base
+            elif rounds%5==0 and rounds >50:
                 dx, dy, derr, fitconfidence, conarray =self.estimate_T_dual(rounds, cutsize, new_frame,old_frame_1,old_frame_2)
+                derr_tolorence=derr_tolorence_base*2
+                
             else: 
                 dx, dy, derr, fitconfidence, conarray = self.estimate_T(rounds, cutsize, new_frame,old_frame_1,n_number=0)
+                derr_tolorence=derr_tolorence_base
 
             fit_confidence_list= fit_confidence_list+list(conarray)
             
@@ -561,24 +571,15 @@ class OpenVideo(rgb.OpenVideo):
                 else:
                     self.divergent_count = max(0, self.divergent_count - 1)        
                                
-            if self.divergent_count > 2 or self.is_stuck():
+            if self.divergent_count > 2 or self.is_stuck(derr_tolorence):
                 self.stuckcounter+=1
                 if self.stuckcounter>1:
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R,60, filterspikes=True)
+                    derr_tolorence=best_derr
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 20, filterspikes=False)
-                    self.skipR=True
-                    self.angle_history = [self.R]
-                    self.derr_history = [best_derr]
-                    #self.position_history = [[self.cx, self.cy]]
-                    self.confidence_history = []
-                    self.rotation_lock =5
-                    self.fail_counter = 0
-                    self.divergent_count = 0
-                    self.stuckcounter = 0
-                    self.skipR_cooldown = 5
-                    self.fail_counter=0
+                    self.post_brute(best_derr)
                     search_angle=10
-                    
+                    derr=best_derr
                 else:
                     print("Locking rotation at last stable R")
                     self.R = self.last_good_R
@@ -622,20 +623,13 @@ class OpenVideo(rgb.OpenVideo):
                 else:
                     
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                    derr_tolorence=best_derr
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 20, filterspikes=False)
                     self.restcount+=1
-                    self.skipR=True
-                    self.angle_history = [self.R]
-                    self.derr_history = [best_derr]
-                    #self.position_history = [[self.cx, self.cy]]
-                    self.confidence_history = []
-                    self.fail_counter = 0
-                    self.divergent_count = 0
-                    self.stuckcounter = 0
-                    self.skipR_cooldown = 6
-                    self.rotation_lock =5
-                    self.keypoints = int(self.baseline_keypoints * 2)
-                    self.keypoints = max(10, min(self.keypoints, 150))
+                    self.post_brute(best_derr)
+                    derr=best_derr
+                    search_angle=10
+                    
                 
             angle=0
             
@@ -653,21 +647,16 @@ class OpenVideo(rgb.OpenVideo):
                 break
             # interate until target is meet of maxrounds is reached.
             rounds+=1
-            if rounds == 25 and self.cooldown==0:
+            if rounds ==self.maxrounds-5 and self.skipR_cooldown==0 and derr>derr_tolorence:
                 print(" Forcing brute force due to slow convergence")
                 best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                derr_tolorence=best_derr
                 best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R,20, filterspikes=False)
-                self.skipR=True
-                self.angle_history = [self.R]
-                self.derr_history = [best_derr]
-                self.position_history = [[self.cx, self.cy]]
-                self.confidence_history = []
-                self.fail_counter = 0
-                self.divergent_count = 0
-                self.stuckcounter = 0
-                self.skipR_cooldown = 6
-                self.rotation_lock =5
-                self.keypoints = 100
+                self.post_brute(best_derr)
+                derr=best_derr
+                
+                search_angle=10
+                
         if rounds >= self.maxrounds and best_derr < derr:
             print(f"Max rounds reached with poor match (derr={derr:.2f}) — reverting to best known state (derr={best_derr:.2f})")
             self.cx = self.last_good_cx
@@ -678,6 +667,22 @@ class OpenVideo(rgb.OpenVideo):
 
         
         return fit_confidence_list
+    
+    def post_brute(self, best_derr):
+        self.skipR=True
+        self.angle_history = [self.R]
+        self.last_good_R=self.R
+        self.derr_history = [best_derr]
+        self.position_history = [[self.cx, self.cy]]
+        self.confidence_history = []
+        self.fail_counter = 0
+        self.divergent_count = 0
+        self.stuckcounter = 0
+        self.skipR_cooldown = 7
+        self.rotation_lock =6
+        self.keypoints = int(self.baseline_keypoints * 2)
+        self.keypoints = max(10, min(self.keypoints, 150))
+        plt.show()
     
     def smooth_curve(self,y, window_size=5):
         window = np.ones(window_size) / window_size
@@ -711,13 +716,29 @@ class OpenVideo(rgb.OpenVideo):
             M= cv2.getRotationMatrix2D(self.center, R, 1.0)
             new_frame_test = cv2.warpAffine(self.frame.copy(), M, (self.width, self.height))
             dx, dy, derr, fitconfidence, conarray = self.estimate_T(rounds, cutsize, new_frame_test,old_frame_1, n_number=0)
-            
             derr_test.append(derr)
         if filterspikes:
             derr_test=self.smooth_curve(derr_test)
             # Remove first and last 2 points due to smoothing artifacts
             derr_test=derr_test[2:-2]
             angletestrange=angletestrange[2:-2]
+        
+        derr_values = np.array(derr_test)
+        minima_indices = argrelextrema(derr_values, np.less, order=2)[0]
+        sorted_minima = sorted(minima_indices, key=lambda i: derr_values[i])
+        print(f'Minima:{sorted_minima}')
+        def score_candidate(index):
+            angle = angletestrange[index]
+            derr = derr_values[index]
+            angle_diff = abs((angle - self.R + 180) % 360 - 180)  # circular difference
+        
+            # Heuristic score: smaller is better
+            return derr + 0.2 * angle_diff
+
+        best_index = min(minima_indices, key=score_candidate)
+        new_R = angletestrange[best_index]
+        best_derr = derr_values[best_index]
+        
         interp_func = interp1d(angletestrange, derr_test, kind='quadratic', fill_value="extrapolate")
         min_angle = min(angletestrange)
         max_angle = max(angletestrange)
@@ -725,39 +746,21 @@ class OpenVideo(rgb.OpenVideo):
         derr_interp = interp_func(angle_fine)
         plt.plot(angletestrange,derr_test,'o')
         plt.plot( angle_fine,derr_interp)
+        plt.scatter(angletestrange[minima_indices], derr_values[minima_indices],s=200, color='black', label='candidates', zorder=5)
+        plt.title(f'Frame {self.frameno+1}')
         plt.xlabel('Angle')
         plt.ylabel('d-error')
-        plt.show()
-        res = minimize_scalar(interp_func, bounds=(min_angle, max_angle), method='bounded')
-
-        if res.success:
-            best_angle = res.x
-            best_derr = res.fun
-            print(f"Interpolated best angle: {best_angle:.2f}°, derr: {best_derr:.2f}")
-            # Apply sanity check before accepting
-            if abs(best_angle - self.R) < search_angle:
-                new_R = self.normalise_angle_deg(best_angle)
-                
-                self.last_good_R = new_R
-                self.angle_history.append(new_R)
-                self.skipR = True
-                self.skipR_cooldown = 5
-                
-            else:
-                print("Interpolated angle jump too large — ignoring")
-                new_R=centre
-        else:
-            print("Interpolation failed — fallback to direct min")
-            best_angle = angletestrange[np.argmin(derr_test)]
-            new_R = self.normalise_angle_deg(best_angle)
+        
+        
         return best_derr, new_R
     
-    def is_stuck(self):
-        
-        if len(self.derr_history) < 5:
+    def is_stuck(self, derr_tolorence):
+        if self.skipR:
             return False
-        recent_derr = self.derr_history[-5:]
-        if np.std(recent_derr) < 1 and np.mean(recent_derr) > 2.5:
+        if len(self.derr_history) < 8:
+            return False
+        recent_derr = self.derr_history[-8:]
+        if np.std(recent_derr) < 1 and np.mean(recent_derr) > derr_tolorence:
             print("Stuck")
             return True
         return False
@@ -1096,7 +1099,7 @@ class OpenVideo(rgb.OpenVideo):
     
         self.templateranges = self.findpointsofinterest(templateimage, self.keypoints, uniform=uniform)
         if len(self.templateranges) < 5:
-            self.templateranges = self.findpointsofinterest(templateimage, self.keypoints * 3, uniform=True)
+            self.templateranges = self.findpointsofinterest(templateimage, 150, uniform=True)
     
         conf_list = []
         con_y_shift_list = []
@@ -1790,7 +1793,7 @@ if __name__ == '__main__':
         # This means that if the video only shows small angle shifts you can reduce the search angle (delta angle).
         # If the polar and linear matching fails a brute force method rotates the image and finds the best linear translation match and returns that angle. This is much slower, but breaks an endless loop.
         # If linear fit panels are not matching tru relaxing the panel_conf_thresh to a lower number. It seems some videos require a lower TH compared to others.
-        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=60, keypoints=50, autotrack=True, dpi=300, w1=1,w2=2)
+        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=90, keypoints=50, autotrack=True, dpi=300, w1=1,w2=2)
         rgb_analysis.start(anglestep=30, windowsize=400, allowedcentreshift=100, maxrounds=45, tolerance=1.1, panel_conf_thresh=62  )
         # try:
             
