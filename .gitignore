@@ -1,0 +1,37 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+.env
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints
+
+# VSCode / Mac / OS files
+.DS_Store
+.vscode/
+
+# Sensitive or local config files
+secrets.json
+config_local.py
+*.sqlite3
+*.log
+
+# Token files
+*.pem
+*.key
+
+# Image files
+*.jpg
+*.jpeg
+*.png
+
+# Ignore csv files
+*.csv
+
+# Ignore all Excel files
+*.xlsx
+*.xls
