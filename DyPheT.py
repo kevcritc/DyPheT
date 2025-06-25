@@ -575,9 +575,9 @@ class OpenVideo(rgb.OpenVideo):
             if self.divergent_count > 2 or self.is_stuck(derr_tolorence):
                 self.stuckcounter+=1
                 if self.stuckcounter>1:
-                    best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R,60, filterspikes=True)
+                    best_derr, self.R, coarse_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R,60, filterspikes=True)
                     derr_tolorence=best_derr*1.1
-                    best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 20, filterspikes=False)
+                    best_derr, self.R,fine_data=self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 30, filterspikes=False)
 
                     self.post_brute(best_derr)
                     search_angle=10
@@ -624,9 +624,9 @@ class OpenVideo(rgb.OpenVideo):
                     self.restcount+=1
                 else:
                     
-                    best_derr, self.R, course_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                    best_derr, self.R, coarse_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
                     derr_tolorence=best_derr*1.1
-                    best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 25, filterspikes=False)
+                    best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 30, filterspikes=False)
                     self.restcount+=1
                     self.post_brute(best_derr)
                     derr=best_derr
@@ -649,11 +649,11 @@ class OpenVideo(rgb.OpenVideo):
                 break
             # interate until target is meet of maxrounds is reached.
             rounds+=1
-            if rounds ==self.maxrounds-5 and self.skipR_cooldown==0 and derr>derr_tolorence:
+            if rounds ==self.maxrounds-5 and derr>derr_tolorence:
                 print(" Forcing brute force due to slow convergence")
-                best_derr, self.R, course_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                best_derr, self.R, coarse_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
                 derr_tolorence=best_derr*1.1
-                best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R,25, filterspikes=False)
+                best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R,30, filterspikes=False)
                 self.post_brute(best_derr)
                 derr=best_derr
                 
@@ -699,6 +699,7 @@ class OpenVideo(rgb.OpenVideo):
         self.bruce_force_active=True
         print('Searching for the correct angle by brute force')
         derr_test=[]
+        test_quality=[]
        
         
         # Normalize center to [-180, 180]
@@ -721,6 +722,9 @@ class OpenVideo(rgb.OpenVideo):
             new_frame_test = cv2.warpAffine(self.frame.copy(), M, (self.width, self.height))
 
             dx, dy, derr, fitconfidence, conarray, good_fit = self.estimate_T(rounds, cutsize, new_frame_test,old_frame_1, n_number=0)
+            derr_test.append(derr)
+            test_quality.append(good_fit)
+            
             
 
                 
@@ -738,13 +742,16 @@ class OpenVideo(rgb.OpenVideo):
         def score_candidate(index):
             angle = angletestrange[index]
             derr = derr_values[index]
-            
+            if test_quality:
+                quality=1
+            else:
+                quality=3
             angle_diff = abs((angle - self.R + 180) % 360 - 180)  # circular difference
             if self.bruteforce_counter==0:
             # Heuristic score: smaller is better
-                return derr + 0.2 * angle_diff
+                return (derr + 0.2 * angle_diff)*quality
             else:
-                return derr
+                return derr*quality
 
         best_index = min(minima_indices, key=score_candidate)
         new_R = angletestrange[best_index]
@@ -765,9 +772,10 @@ class OpenVideo(rgb.OpenVideo):
         plt.xlabel('Angle /degree')
         plt.ylabel('d-error')
         
-
-        
-        return best_derr, self.normalise_angle_deg(new_R)
+        data_array=np.empty((len(derr_test),2),dtype=float)
+        data_array[:,0]=angletestrange
+        data_array[:,1]=derr_test
+        return best_derr, self.normalise_angle_deg(new_R),data_array
 
     
     def is_stuck(self, derr_tolorence):
@@ -1814,7 +1822,7 @@ class ThreeDvideoAnalysis(Process_cells):
 
 if __name__ == '__main__':
     # these are the filenames of the movie files - you need a pair (overlay and RGB using the same name just replace overlay with RGB)
-    files=['B3_Overlay_80_120.wmv']
+    files=['D8_Overlay_0_160.wmv']
     
     
     for file in files:
@@ -1830,8 +1838,8 @@ if __name__ == '__main__':
         # If the polar and linear matching fails a brute force method rotates the image and finds the best linear translation match and returns that angle. This is much slower, but breaks an endless loop.
         # If linear fit panels are not matching tru relaxing the panel_conf_thresh to a lower number. It seems some videos require a lower TH compared to others.
 
-        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=120, keypoints=50, autotrack=True, dpi=300, w1=1,w2=2)
-        rgb_analysis.start(anglestep=30, windowsize=400, allowedcentreshift=100, maxrounds=45, tolerance=1.1, panel_conf_thresh=62  )
+        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=45, keypoints=25, autotrack=True, dpi=300, w1=1,w2=2)
+        rgb_analysis.start(anglestep=30, windowsize=300, allowedcentreshift=100, maxrounds=30, tolerance=0.8, panel_conf_thresh=62  )
 
         # try:
             
