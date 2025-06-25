@@ -1795,7 +1795,7 @@ class ThreeDvideoAnalysis(Process_cells):
 
 if __name__ == '__main__':
     # these are the filenames of the movie files - you need a pair (overlay and RGB using the same name just replace overlay with RGB)
-    files=['D8_Overlay_0_160.wmv']
+    files=['C3_Overlay_80_120.wmv']
     
     
     for file in files:
