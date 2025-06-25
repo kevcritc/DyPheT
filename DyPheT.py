@@ -15,7 +15,6 @@ import csv
 import datetime
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
-from scipy.optimize import minimize_scalar
 from scipy.signal import argrelextrema
 
 
@@ -338,7 +337,7 @@ class OpenVideo(rgb.OpenVideo):
             self.calibration_derr = []
             self.calibration_anstde = []
         self.angleclose=False
-        self.rotation_conf_thresh = 98.5
+        self.rotation_conf_thresh = 98
         self.rotation_lock=0
         self.stuckcounter=0
         self.restcount=0
@@ -373,8 +372,9 @@ class OpenVideo(rgb.OpenVideo):
         search_angle=self.search_angle
         while  rounds<self.maxrounds:
             
-            if rounds<5:
-                tolerance=0.0
+            if rounds<3:
+                tolerance=0.1
+
             else:
                 tolerance=self.tolerance
             tx = self.center[0] - self.cx
@@ -414,7 +414,9 @@ class OpenVideo(rgb.OpenVideo):
             alpha1 = self.derr_angle_to_alpha(derr,anglechange)
             
             # Apply damped to translation
-            
+            if self.allow_big_shifts:
+                alpha1=1.0
+                
             self.cx+=dx*alpha1
             self.cy+=dy*alpha1
             tx = self.center[0] - self.cx
@@ -491,6 +493,7 @@ class OpenVideo(rgb.OpenVideo):
             # Creating some logic to prevent being stuck between two positions of just multiple fails to fit.
             #  There are limits to this, e.g. lower time points between frames is a big advantage. Low rotation helps.
            
+
             # Skip logic with a cooldown.
             
             if rounds<1:
@@ -522,7 +525,7 @@ class OpenVideo(rgb.OpenVideo):
                     elif sum(good_recent) >= 2:
                         print('Initiating skip for next 3 rounds')
                         self.skipR = True
-                        self.skipR_cooldown = 5
+                        self.skipR_cooldown = 7
                         self.keypoints = int(self.baseline_keypoints * 0.9)
                         self.keypoints = max(10, min(self.keypoints, 150))
             
@@ -561,7 +564,7 @@ class OpenVideo(rgb.OpenVideo):
                     print('Attempt to correcting non-divergent behavior')
                     self.R=self.last_good_R
                     self.skipR=True
-                    self.skipR_cooldown = max(self.skipR_cooldown, 5)
+                    self.skipR_cooldown = max(self.skipR_cooldown, 10)
                     self.keypoints = 100
                     self.keypoints = max(10, min(self.keypoints, 150))
                     
@@ -575,6 +578,7 @@ class OpenVideo(rgb.OpenVideo):
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R,60, filterspikes=True)
                     derr_tolorence=best_derr*1.1
                     best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 20, filterspikes=False)
+
                     self.post_brute(best_derr)
                     search_angle=10
                     derr=best_derr
@@ -590,7 +594,7 @@ class OpenVideo(rgb.OpenVideo):
             
 
             self.angle_test_list.append([self.R,anstde])
-            if dx>150 or dy>150 or derr>100:
+            if dx>500 or dy>500 or derr>100:
                 print(f'might be a tranlation problem the error the {derr:.1f}')
             
             # Failure tracking
@@ -620,9 +624,9 @@ class OpenVideo(rgb.OpenVideo):
                     self.restcount+=1
                 else:
                     
-                    best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
-                    derr_tolorence=best_derr
-                    best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 20, filterspikes=False)
+                    best_derr, self.R, course_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                    derr_tolorence=best_derr*1.1
+                    best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R, 25, filterspikes=False)
                     self.restcount+=1
                     self.post_brute(best_derr)
                     derr=best_derr
@@ -647,9 +651,9 @@ class OpenVideo(rgb.OpenVideo):
             rounds+=1
             if rounds ==self.maxrounds-5 and self.skipR_cooldown==0 and derr>derr_tolorence:
                 print(" Forcing brute force due to slow convergence")
-                best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
-                derr_tolorence=best_derr
-                best_derr, self.R =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R,20, filterspikes=False)
+                best_derr, self.R, course_data =self.bruteforce(rounds, cutsize, old_frame_1,self.search_angle/10, self.R, 60, filterspikes=True)
+                derr_tolorence=best_derr*1.1
+                best_derr, self.R, fine_data =self.bruteforce(rounds, cutsize, old_frame_1,10, self.R,25, filterspikes=False)
                 self.post_brute(best_derr)
                 derr=best_derr
                 
@@ -667,8 +671,10 @@ class OpenVideo(rgb.OpenVideo):
         return fit_confidence_list
     
     def post_brute(self, best_derr):
+
         self.bruce_force_active=False
         self.allow_big_shifts=True
+
         self.skipR=True
         self.bruteforce_counter+=1
         self.angle_history = [self.R]
@@ -680,6 +686,7 @@ class OpenVideo(rgb.OpenVideo):
         self.stuckcounter = 0
         self.skipR_cooldown = 7
         self.rotation_lock =6
+        self.allow_big_shifts=True
         self.keypoints = int(self.baseline_keypoints * 2)
         self.keypoints = max(10, min(self.keypoints, 150))
         plt.show()
@@ -712,9 +719,10 @@ class OpenVideo(rgb.OpenVideo):
             
             M= cv2.getRotationMatrix2D(self.center, R, 1.0)
             new_frame_test = cv2.warpAffine(self.frame.copy(), M, (self.width, self.height))
+
             dx, dy, derr, fitconfidence, conarray, good_fit = self.estimate_T(rounds, cutsize, new_frame_test,old_frame_1, n_number=0)
             
-            derr_test.append(derr)
+
                 
             
         if filterspikes:
@@ -730,6 +738,7 @@ class OpenVideo(rgb.OpenVideo):
         def score_candidate(index):
             angle = angletestrange[index]
             derr = derr_values[index]
+            
             angle_diff = abs((angle - self.R + 180) % 360 - 180)  # circular difference
             if self.bruteforce_counter==0:
             # Heuristic score: smaller is better
@@ -756,8 +765,10 @@ class OpenVideo(rgb.OpenVideo):
         plt.xlabel('Angle /degree')
         plt.ylabel('d-error')
         
+
         
         return best_derr, self.normalise_angle_deg(new_R)
+
     
     def is_stuck(self, derr_tolorence):
         if self.skipR:
@@ -807,9 +818,9 @@ class OpenVideo(rgb.OpenVideo):
             cutsize=0
         return cutsize
     
-    def estimate_T(self,rounds, cutsize, new_frame,old_frame, n_number):
+    def estimate_T(self,rounds, cutsize, new_frame,old_frame, n_number, brute_force=False):
         
-       
+        
         window_shift=650
         
         rot_draw=new_frame.copy() #changed from rotated
@@ -827,6 +838,7 @@ class OpenVideo(rgb.OpenVideo):
         if self.bruteforce_counter>0:
             confidenceth=40
             
+
             
         while notlongenough:
             print(f'Matching {panels} x {panels} panels')
@@ -846,10 +858,11 @@ class OpenVideo(rgb.OpenVideo):
                 
                 if panels>6:
                     outsideonly=False
+
                 if self.bruce_force_active and  panels>6:
                     return 0,0, 100,  50, [0], False
                     break
-                    
+
                
             if solvefailcount>panth_level:
                 notlongenough=False
@@ -900,9 +913,11 @@ class OpenVideo(rgb.OpenVideo):
             cv2.imshow(f'Overlayed match update frame {self.frameno+1}',dst2)
             cv2.moveWindow(f'Overlayed match update frame {self.frameno+1}',window_shift,0)
             cv2.waitKey(1)    
+
             
             
             return delatxtm,-1*delatytm, stdxy,  minconfindence, delconarray, good_fit
+
             
             
     
@@ -942,9 +957,11 @@ class OpenVideo(rgb.OpenVideo):
         delconfidence=[]
         outcoord=[]
         if self.allow_big_shifts:
+
             max_shift=self.width
         else:
             max_shift=100
+
         
         
         for pa,i in enumerate(i_values):
@@ -956,6 +973,7 @@ class OpenVideo(rgb.OpenVideo):
                     mask = self.contourtemp[k:k+yt_step, i:i+xt_step].copy()
                     
                     if np.sum(mask)>0:
+
                         
                           
                         
@@ -968,6 +986,7 @@ class OpenVideo(rgb.OpenVideo):
                             search_template=np.zeros(res.shape,dtype=np.uint8)
                             cv2.rectangle(search_template,(i-max_shift,k-max_shift),(i+xt_step+max_shift,k+yt_step+max_shift),255,-1)
                             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res, mask=search_template)
+
                         
                         if method in [cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED]:
                             max_val=1-min_val
@@ -1090,8 +1109,8 @@ class OpenVideo(rgb.OpenVideo):
         testimage = cv2.cvtColor(warp, cv2.COLOR_BGR2GRAY)
         templateimage = cv2.cvtColor(old_warp, cv2.COLOR_BGR2GRAY)
         
-        dst=cv2.addWeighted(testimage, 0.5, templateimage, 0.5,0)
-        cv2.imshow('overlay of warps', dst)
+        # dst=cv2.addWeighted(testimage, 0.5, templateimage, 0.5,0)
+        # cv2.imshow('overlay of warps', dst)
         displayimage = cv2.hconcat([old_warp, warp])
         font = cv2.FONT_HERSHEY_SIMPLEX
         for o in range(0, 360, 45):
@@ -1795,7 +1814,7 @@ class ThreeDvideoAnalysis(Process_cells):
 
 if __name__ == '__main__':
     # these are the filenames of the movie files - you need a pair (overlay and RGB using the same name just replace overlay with RGB)
-    files=['C3_Overlay_80_120.wmv']
+    files=['B3_Overlay_80_120.wmv']
     
     
     for file in files:
@@ -1810,8 +1829,10 @@ if __name__ == '__main__':
         # This means that if the video only shows small angle shifts you can reduce the search angle (delta angle).
         # If the polar and linear matching fails a brute force method rotates the image and finds the best linear translation match and returns that angle. This is much slower, but breaks an endless loop.
         # If linear fit panels are not matching tru relaxing the panel_conf_thresh to a lower number. It seems some videos require a lower TH compared to others.
+
         rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=120, keypoints=50, autotrack=True, dpi=300, w1=1,w2=2)
         rgb_analysis.start(anglestep=30, windowsize=400, allowedcentreshift=100, maxrounds=45, tolerance=1.1, panel_conf_thresh=62  )
+
         # try:
             
         # except Exception as e:
