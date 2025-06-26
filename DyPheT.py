@@ -401,7 +401,7 @@ class OpenVideo(rgb.OpenVideo):
             if len(self.rotatedframes) < 3:
                 dx, dy, derr, fitconfidence, conarray, good_fit = self.estimate_T(rounds, cutsize, new_frame,old_frame_1, n_number=0)
                 derr_tolorence=derr_tolorence_base
-            elif rounds%5==0 and rounds >50:
+            elif self.frameno%3==0 and self.frameno<15:
                 dx, dy, derr, fitconfidence, conarray,good_fit =self.estimate_T_dual(rounds, cutsize, new_frame,old_frame_1,old_frame_2)
                 derr_tolorence=derr_tolorence_base*2
                 
@@ -767,11 +767,14 @@ class OpenVideo(rgb.OpenVideo):
         plt.scatter(angletestrange[minima_indices], derr_values[minima_indices],s=80, color='black', label='candidates', zorder=5)
         if not filterspikes:
             plt.plot([new_R,new_R],[0,25], '--', color='red', label='Selected Angle')
-        plt.legend()
+        
         plt.title(f'Frame {self.frameno+1}')
         plt.xlabel('Angle /degree')
         plt.ylabel('d-error')
-        
+        plt.ylim(0,30)
+        handles, labels = plt.gca().get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        plt.legend(by_label.values(), by_label.keys())
         data_array=np.empty((len(derr_test),2),dtype=float)
         data_array[:,0]=angletestrange
         data_array[:,1]=derr_test
@@ -1822,7 +1825,7 @@ class ThreeDvideoAnalysis(Process_cells):
 
 if __name__ == '__main__':
     # these are the filenames of the movie files - you need a pair (overlay and RGB using the same name just replace overlay with RGB)
-    files=['D8_Overlay_0_160.wmv']
+    files=['C3_Overlay_80_120.wmv']
     
     
     for file in files:
@@ -1838,8 +1841,8 @@ if __name__ == '__main__':
         # If the polar and linear matching fails a brute force method rotates the image and finds the best linear translation match and returns that angle. This is much slower, but breaks an endless loop.
         # If linear fit panels are not matching tru relaxing the panel_conf_thresh to a lower number. It seems some videos require a lower TH compared to others.
 
-        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=45, keypoints=25, autotrack=True, dpi=300, w1=1,w2=2)
-        rgb_analysis.start(anglestep=30, windowsize=300, allowedcentreshift=100, maxrounds=30, tolerance=0.8, panel_conf_thresh=62  )
+        rgb_analysis = ThreeDvideoAnalysis(file, path, scale=1.0, tpf=3600, maxdistance=100, addnumbers=True, search_angle=45, keypoints=36, autotrack=True, dpi=300, w1=1,w2=2)
+        rgb_analysis.start(anglestep=30, windowsize=300, allowedcentreshift=100, maxrounds=30, tolerance=1.0, panel_conf_thresh=62  )
 
         # try:
             
